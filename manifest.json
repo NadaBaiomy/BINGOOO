@@ -1,0 +1,27 @@
+{
+  "name": "Bingo Party",
+  "short_name": "Bingo Party",
+  "description": "لعبة بينجو جماعية ممتعة — العبي مع صاحباتك أونلاين بكود الغرفة!",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1e1033",
+  "theme_color": "#1e1033",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "bingo-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "bingo-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
