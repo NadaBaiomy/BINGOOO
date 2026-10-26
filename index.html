@@ -421,7 +421,6 @@
     <button class="btn-pink" onclick="saveProfile()">يلا نبدأ! 🎉</button>
   </div>
 </div>
-
 <!-- ====================== MENU SCREEN ====================== -->
 <div class="screen" id="screen-menu">
   <div class="menu-wrap">
@@ -630,7 +629,7 @@ const STATE = {
 
 const BINGO = ['B','I','N','G','O'];
 
-/* ---------- Screen navigation ---------- */
+  /* ---------- Screen navigation ---------- */
 function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
@@ -780,6 +779,7 @@ function getCompletedLinesCount(markedSet, board){
   return count;
 }
 
+
 /* ---------- Mark a number on my board ---------- */
 function markNumber(n){
   if(!STATE.myBoard.includes(n)) return false;
@@ -852,9 +852,12 @@ function callNumber(n){
     renderOpponents();
     renderPool();
     setTimeout(aiTurn, 900);
+  } else if(STATE.isHost){
+    hostHandleCall(n, STATE.myId);
   } else {
-    broadcastCall(n);
-    passTurn();
+    const c=STATE.conns[STATE.hostId];
+    if(c){ try{c.send({type:'call',n:n,from:STATE.myId});}catch(e){} }
+    /* الدور هيتحدّث لما المضيفة تبعت الحالة الرسمية للكل */
   }
 }
 
@@ -918,6 +921,8 @@ function pressBingo(){
 }
 document.getElementById('bingo-btn').onclick=pressBingo;
 
+  pressBingo;
+
 /* ---------- Winner ---------- */
 function declareWinner(name,avatar){
   STATE.gameOver=true;
@@ -961,12 +966,16 @@ function runConfetti(){
 /* ---------- Restart ---------- */
 function restartSameMode(){
   if(STATE.mode==='cpu') startVsComputer();
-  else {
+  else if(STATE.isHost){
     resetMyState();
-    if(STATE.isHost){
-      broadcastRestart();
-    }
+    STATE.turnIndex=0;
+    broadcastRestart();
     startMultiplayerBoard();
+  } else {
+    /* الضيفة تطلب من المضيفة، مش تعمل إعادة لوحدها */
+    const c=STATE.conns[STATE.hostId];
+    if(c){ try{c.send({type:'restart-request',id:STATE.myId});}catch(e){} }
+    toast('طلبتِ إعادة اللعب.. استني المضيفة 🔄');
   }
 }
 function backToMenu(){
@@ -1032,6 +1041,10 @@ function openMultiplayerModal(){
 function closeMultiplayerModal(){
   document.getElementById('mp-modal').classList.remove('active');
 }
+
+  
+
+  
 function backToChoose(){
   document.getElementById('mp-choose').style.display='block';
   document.getElementById('mp-wait').style.display='none';
@@ -1215,6 +1228,7 @@ function removePlayer(id){
   STATE.players=STATE.players.filter(p=>p.id!==id);
   delete STATE.conns[id];
   renderPlayersList();
+  if(STATE.isHost) broadcastPlayers();
   toast('لاعب خرج من الغرفة');
 }
 
@@ -1230,7 +1244,6 @@ function renderPlayersList(){
   const btn=document.getElementById('start-game-btn');
   if(btn) btn.disabled=STATE.players.length<2;
 }
-
 function copyRoomCode(){
   const code=STATE.myId;
   if(navigator.clipboard){
@@ -1263,8 +1276,14 @@ function startMultiplayerBoard(){
 function broadcastMsg(msg){
   Object.values(STATE.conns).forEach(c=>{ try{c.send(msg);}catch(e){} });
 }
-function broadcastCall(n){
-  broadcastMsg({type:'call',n:n,from:STATE.myId});
+/* host relays any guest message to all OTHER guests */
+function relayMsg(msg, excludeId){
+  Object.entries(STATE.conns).forEach(([id,c])=>{
+    if(id!==excludeId){ try{c.send(msg);}catch(e){} }
+  });
+}
+function broadcastPlayers(){
+  broadcastMsg({type:'players',players:STATE.players.map(p=>({id:p.id,name:p.name,avatar:p.avatar,isHost:p.isHost}))});
 }
 function broadcastStatus(){
   broadcastMsg({type:'status',id:STATE.myId,letters:STATE.bingoLetters});
@@ -1274,6 +1293,20 @@ function broadcastWin(){
 }
 function broadcastRestart(){
   broadcastMsg({type:'restart'});
+}
+
+/* host is the single source of truth for the turn:
+   applies the call, advances the turn once, broadcasts authoritative state */
+function hostHandleCall(n, fromId){
+  if(STATE.gameOver) return;
+  if(!STATE.players.length) return;
+  STATE.calledNumbers.add(n);
+  renderPool();
+  markNumber(n);
+  STATE.turnIndex=(STATE.turnIndex+1)%STATE.players.length;
+  STATE.myTurn=(STATE.players[STATE.turnIndex]?.id===STATE.myId);
+  broadcastMsg({type:'call',n:n,from:fromId,turnIndex:STATE.turnIndex});
+  updateTurnBanner(); renderOpponents(); renderPool();
 }
 
 /* ---------- Incoming messages ---------- */
@@ -1287,6 +1320,7 @@ function handleMpMessage(d,conn){
         STATE.players.push(player);
       }
       conn.send({type:'welcome',players:STATE.players.map(p=>({id:p.id,name:p.name,avatar:p.avatar,isHost:p.isHost}))});
+      broadcastPlayers();   // كل اللاعبين يعرفوا بالعضو الجديد
       renderPlayersList();
       sysChat(`${avatarHTML(player.avatar)} ${escapeHtml(d.name)} انضم للغرفة 👋`);
       break;
@@ -1316,28 +1350,52 @@ function handleMpMessage(d,conn){
       break;
     }
     case 'call': {
-      STATE.calledNumbers.add(d.n);
-      renderPool();
-      markNumber(d.n);
-      passTurn();
+      /* المضيفة هي المرجع: بتحدّث الدور وتبعت الحالة الرسمية للكل */
+      if(STATE.isHost){ hostHandleCall(d.n, d.from); }
+      else {
+        STATE.calledNumbers.add(d.n);
+        if(typeof d.turnIndex==='number') STATE.turnIndex=d.turnIndex;
+        renderPool();
+        markNumber(d.n);
+        STATE.myTurn=(STATE.players[STATE.turnIndex]?.id===STATE.myId);
+        updateTurnBanner(); renderOpponents(); renderPool();
+      }
       break;
     }
     case 'status': {
       const p=STATE.players.find(x=>x.id===d.id);
       if(p){ p.letters=d.letters; renderOpponents(); }
+      if(STATE.isHost) relayMsg(d, conn.peer);
+      break;
+    }
+    case 'players': {
+      const old=new Map(STATE.players.map(x=>[x.id,x.letters||0]));
+      STATE.players=d.players.map(p=>({id:p.id,name:p.name,avatar:p.avatar||DEFAULT_AVATAR,letters:old.get(p.id)||0,isHost:!!p.isHost}));
+      renderPlayersList();
+      if(STATE.mode==='mp') renderOpponents();
+      break;
+    }
+    case 'restart-request': {
+      if(!STATE.isHost) return;
+      const rq=STATE.players.find(x=>x.id===d.id);
+      toast((rq?rq.name:'لاعب')+' عايزة نلعب من تاني 🔄');
+      restartSameMode();
       break;
     }
     case 'win': {
       STATE.gameOver=true;
       declareWinner(d.name,d.avatar);
       sysChat(`🏆 ${escapeHtml(d.name)} كسب!`);
+      if(STATE.isHost) relayMsg(d, conn.peer);
       break;
     }
     case 'chat': {
       addChatMessage(d.name,d.msg,false,d.avatar);
+      if(STATE.isHost) relayMsg(d, conn.peer);
       break;
     }
     case 'restart': {
+      STATE.turnIndex=0;
       startMultiplayerBoard();
       sysChat('نلعب تاني! 🔄');
       break;
@@ -1349,15 +1407,7 @@ function handleMpMessage(d,conn){
   }
 }
 
-function passTurn(){
-  if(STATE.gameOver) return;
-  STATE.turnIndex=(STATE.turnIndex+1)%STATE.players.length;
-  STATE.myTurn=(STATE.players[STATE.turnIndex]?.id===STATE.myId);
-  updateTurnBanner();
-  renderOpponents();
-  renderPool();
-}
-
+  
 /* ============================================================
    CHAT
    ============================================================ */
@@ -1434,3 +1484,6 @@ showScreen('screen-profile');
 </script>
 </body>
 </html>
+  
+
+  
